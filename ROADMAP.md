@@ -1,73 +1,59 @@
-# Fork 开发方向
+# Roadmap
 
-> 这是**本 fork 自己的计划**，不是给上游的提案，也不承诺任何时间表。
-> 上游 `#150` 已关闭（2026-10-05）：不是被否决，是维护者认为规模与长期维护成本接不住，
-> 所以我们改为自维护，并按下面这个方向走。
+## Collector
 
-## 现状
+- [ ] Improve accuracy of total power usage on several devices by adding more sensors and refining estimation algorithms ([#17](https://github.com/Daminoup88/WattSeal/issues/17))
+- [ ] Add tests
+- [ ] Run as a service ([#18](https://github.com/Daminoup88/WattSeal/issues/18))
+- [ ] Configurable sensors polling frequency with no regression on purge / UI averages ([46](https://github.com/Daminoup88/WattSeal/issues/46))
+- [ ] Improved estimation of energy consumption on machines with Apple Silicon processors ([46](https://github.com/Daminoup88/WattSeal/issues/46))
+- [x] Add the possibility to run only sensors by implementing a headless mode ([52](https://github.com/Daminoup88/WattSeal/issues/52))
 
-| | |
-|---|---|
-| 分支 | `feat/overlay-widget` |
-| 内容 | 完整 WattSeal + 新增 `overlay/` crate；`common/` 一行未改 |
-| 验证 | `cargo test -p overlay` 19 passed；三平台 CI 绿（run `35314209775`） |
-| 发行 | fork 上的 `overlay-preview-2`（Windows x64，prerelease） |
-| 上游 | 无待办（PR 已关，不再提） |
+### Security
 
-## 三条原则
+- [/] Remove WinRing0 driver dependency on Windows (see [Security](SECURITY.md#winring0-kernel-driver-windows) section for details) ([#19](https://github.com/Daminoup88/WattSeal/issues/19))
 
-1. **"几乎分离"是最差的形态。** 要么进得去（小到能被维护），要么彻底在外（只碰数据、不碰代码）。
-   半分离的状态是：付了耦合的成本，又没拿到集成的收益。
-2. **值稳定，位置不稳。** "CPU 41.2 W" 这个含义不会变；变的是它在哪张表、哪个字段、什么载荷形状。
-   所以只依赖**数值 + 世代号**，就不怕上游重构。
-3. **能编译期失败就别运行期失败。** 同一个 crate 里，上游改类型我们编译不过（五分钟修完）；
-   独立程序里，上游改 schema 我们可能静默读错。独立化的代价就在这里，只能用"读不到就隐藏"来兜。
+## Data integration
 
-## 目标形态
+- [x] The ability to send data via MQTT to a broker ([#55](https://github.com/Daminoup88/WattSeal/issues/55))
+- [ ] Change from power metrics to energy metrics (at least at the sensor level) ([#58](https://github.com/Daminoup88/WattSeal/issues/58))
 
-| | 产物 |
-|---|---|
-| ① **打包版** | 本 fork = 完整 WattSeal + 浮窗，跟随上游同步 |
-| ② **独立版** | 一个只读数据库的小二进制，**能配原版 WattSeal**，离线可用，不需要 broker |
+## UI / UX
 
-**数据源只有一个**：`power_monitoring.db`（WAL，可并发只读；位于他的 exe 同级目录）。
+- [ ] Top process in tooltip for each component and in the total chart ([#20](https://github.com/Daminoup88/WattSeal/issues/20))
+- [ ] Select each component in the total chart ([#21](https://github.com/Daminoup88/WattSeal/issues/21))
+- [ ] Notification thresholds — total and per process ([#12](https://github.com/Daminoup88/WattSeal/issues/12))
+- [ ] Differentiate apps and background processes ([#22](https://github.com/Daminoup88/WattSeal/issues/22))
 
-**不做**：MQTT 订阅、内嵌 broker —— 载荷契约目前没有版本号，而且上游正在重划
-`collector ↔ connectors` 这条界；本机场景也不需要传输层。
+## Network & emissions
 
-## 现在就该做的（都不需要上游参与）
+- [ ] Indirect network power usage and emissions calculation ([#23](https://github.com/Daminoup88/WattSeal/issues/23))
+- [ ] Indirect network power usage by domain ([#23](https://github.com/Daminoup88/WattSeal/issues/23))
+- [ ] Power usage breakdown by browser tab ([#24](https://github.com/Daminoup88/WattSeal/issues/24))
+- [ ] Auto-update electricity prices and carbon emissions on build ([#25](https://github.com/Daminoup88/WattSeal/issues/25))
 
-| # | 事项 | 为什么现在做 |
-|---|---|---|
-| 1 | 把"跳过迁移"改成**世代判断**：启动读 `PRAGMA user_version`，只支持已知世代，未知就降级；**不写入、不迁移** | 现在的代码用 `open_without_migrations()`，上游 bump 到 v3 我们会静默读错。第三方工具不该动他的库 |
-| 2 | 自查三处**我们自己标过"未验证"**的地方：设置面板是否溢出（固定 560×452 且无滚动，`Drop shadow` 那一行是后加的）、宽度截断的观感、`Drop shadow` 在不可渲染模式下的开关行为 | 上游说的"bug 不少"没给清单，但这三处是我们自己心里没底的 |
-| 3 | 砍掉 3 套平行副本：主题、语言、设置改为从 `ui_settings` 读（`theme` 和 `language` 已经在里面） | 维护面从 6 套副本降到 1~2 套，代码也能少几百行 |
-| 4 | 跟上游 rebase + 重跑三平台 CI + 出新 release | 这条线刚静置过，保持它能跑 |
+## Architecture Diagrams 
 
-## 以后再做（有触发条件，不是待办）
+### Possible architectural goal
 
-| 事项 | 触发条件 |
-|---|---|
-| 拆出**独立二进制**（只读 schema + 首次配置数据目录） | 需要给别人用，或想让浮窗脱离打包版 |
-| **启动器**（我们的 exe 拉起原版当子进程，做到单入口） | 确实要"一个图标启动全部"。注意：先判断数据是否新鲜再启动 —— 上游采集器有自己的单例锁，重复启动会报错退出 |
-| **极简兜底**（只显示能确认的数字，无标签、无设置、语言中立） | 世代不匹配时的降级路径，可顺手做进第 1 项 |
+This diagram represents possible architectural approach after the implementation
+of data transmission to a broker using MQTT.
 
-**独立版的已知坑**（决定做之前先认下）：数据目录在**上游 exe 同级**，跨平台不一致 ——
-Windows 好办；Linux 的 AppImage 挂载目录是只读的；macOS 的 bundle 内不可写，
-而且本项目在 macOS 上**只编译过、从未运行**。
+![](resources/svg/possible_arch_after_mqtt_implem.svg)
 
-## 明确不做
+### Components architecture
 
-- **为了合并而砍的小版本** —— 唯一触发条件：上游明确说"我想要小的"。沉默不算。
-- **MQTT 数据源 / 内嵌 broker** —— 等上游给出带版本的载荷契约再说；到那时它是"第二数据源"，不是默认。
+This diagram represents a preliminary architectural design for adding data
+transmission to an MQTT broker, as well as integration with software that
+captures data from Apple devices equipped with Apple Silicon processors.
 
-## 维护纪律
+![](resources/svg/components_arch_hecaton_project.svg)
 
-1. **不引入第二套采集逻辑** —— 不碰 MSR / 驱动 / NVML / ADLX，只消费上游算好的值。
-   这是维护面小的根本；破了就变成"第二个 collector"。
-2. **读不到就隐藏，不显示错数** —— 第三方工具唯一不能犯的错。
-3. **身份写清**（第三方、只读、不是 WattSeal 的一部分）—— 用户报障才不会算到上游头上。
+### Decision flow architecture
 
-## 顺序
+This diagram represents a decision-flow architecture proposal that includes the
+addition of an MQTT mode to send data to a broker, as well as the addition of a
+headless mode.
 
-`1 → 2 → 3 → 4`，前三件各半天到一天，彼此不依赖。
+![](resources/svg/decision_flow_arch_hecaton_project.svg)
+
