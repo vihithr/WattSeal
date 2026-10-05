@@ -19,8 +19,6 @@ pub enum Message {
     CustomKwhCostInput(String),
     ChangeCustomCurrency(Currency),
     ToggleLaunchOnStartup(bool),
-    /// Show or hide the always-on-top overlay window.
-    ToggleOverlay(bool),
     ChangeCloseBehavior(common::CloseBehavior),
     ToggleRememberCloseChoice(bool),
     OpenSettings,

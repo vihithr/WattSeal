@@ -1,6 +1,4 @@
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-use std::{collections::HashMap, process::Command, time::SystemTime};
+use std::{collections::HashMap, time::SystemTime};
 
 use chrono::{DateTime, Local};
 use common::{
@@ -10,53 +8,37 @@ use common::{
 use iced::{
     Alignment, Element, Length, Subscription, Task, event,
     time::{Duration, every},
-    widget::{Button, Column, Container, Row, Scrollable, Text, button, checkbox, image, pick_list, stack, text_input},
+    widget::{Button, Column, Container, Row, Scrollable, Text, button, checkbox, image, stack},
     window,
 };
-
-/// Whether the overlay is currently requested.
-///
-/// It runs in its own process and the two communicate through the overlay's own
-/// config file rather than through IPC, so this asks the overlay crate instead
-/// of reading that file here.
-fn overlay_requested() -> bool {
-    overlay::is_requested()
-}
-
-/// Asks the overlay — a separate process — to close.
-///
-/// Doing this while shutting down covers every exit path at once, including the
-/// ones where this process terminates immediately (`EXIT_CODE_SHUTDOWN_ALL`) and
-/// could otherwise leave the overlay orphaned.
-fn request_overlay_close() {
-    overlay::request_close();
-}
 
 use crate::{
     components::{footer::Footer, header::Header, helpers::modal, sensor_state::SensorState},
     message::Message,
-    pages::{Page, dashboard::DashboardPage, info::InfoPage, settings::SettingsPage},
+    pages::{
+        Page,
+        dashboard::DashboardPage,
+        info::InfoPage,
+        settings::{SettingsPage, setup_view},
+    },
     styles::{
         button::ButtonStyle,
         container::ContainerStyle,
         style_constants::{
-            FONT_BOLD, FONT_SIZE_BODY, FONT_SIZE_HEADER, FONT_SIZE_SMALL, FONT_SIZE_SUBTITLE, PADDING_XLARGE,
-            SPACING_LARGE, SPACING_MEDIUM, SPACING_SMALL,
+            FONT_BOLD, FONT_SIZE_BODY, FONT_SIZE_HEADER, FONT_SIZE_SUBTITLE, PADDING_XLARGE, SPACING_LARGE,
+            SPACING_MEDIUM,
         },
         text::TextStyle,
     },
     themes::AppTheme,
     translations::{
-        TranslatedCarbonIntensity, TranslatedElectricityCost, app_name, carbon_info_measured, close_dialog_description,
-        close_dialog_title, close_everything, close_remember_choice, close_ui_only, custom_carbon_invalid,
-        custom_carbon_placeholder, custom_kwh_cost_placeholder, database_migrating_description,
-        database_migrating_title, format_emissions, format_energy, format_number, info_modal_all_time_power,
-        info_modal_all_time_top_consumer, info_modal_current_power, info_modal_current_top_consumer,
-        info_modal_description, info_modal_title, info_modal_top_process, kwh_cost_invalid, modal_close, na,
-        setup_choose_carbon, setup_choose_electricity, setup_choose_language, setup_confirm, setup_welcome_title,
-        theme_name,
+        app_name, carbon_info_measured, close_dialog_description, close_dialog_title, close_everything,
+        close_remember_choice, close_ui_only, database_migrating_description, database_migrating_title,
+        format_emissions, format_energy, format_number, info_modal_all_time_power, info_modal_all_time_top_consumer,
+        info_modal_current_power, info_modal_current_top_consumer, info_modal_description, info_modal_title,
+        info_modal_top_process, modal_close, na, theme_name,
     },
-    types::{AppLanguage, CarbonIntensity, Currency, ElectricityCost, ProcessLimit, SensorRecord, TimeRange},
+    types::{AppLanguage, CarbonIntensity, CountryKey, ElectricityCost, ProcessLimit, SensorRecord, TimeRange},
 };
 
 const FPS: u64 = 1;
@@ -82,8 +64,6 @@ pub struct App {
     electricity_cost: ElectricityCost,
     custom_kwh_cost_input: String,
     launch_on_startup: bool,
-    /// Whether the overlay is currently requested (mirrors its config file).
-    overlay_on: bool,
     show_setup: bool,
     header: Header,
     footer: Footer,
@@ -115,16 +95,16 @@ impl App {
             match database.load_ui_settings() {
                 Ok(Some(s)) => {
                     let lang = AppLanguage::from_code(&s.language);
-                    let ci = CarbonIntensity::from_label(&s.carbon_intensity);
+                    let ci = CarbonIntensity::from_stored(&s.carbon_intensity);
                     let theme = AppTheme::from_name(&s.theme);
-                    let ec = ElectricityCost::from_label_and_currency(&s.kwh_cost, Some(&s.currency));
+                    let ec = ElectricityCost::from_stored(&s.kwh_cost, Some(&s.currency));
                     (lang, ci, theme, ec, false, s.close_behavior)
                 }
                 _ => (
-                    AppLanguage::default(),
-                    CarbonIntensity::PRESETS[8],
+                    AppLanguage::from_os(),
+                    CarbonIntensity::from_os(),
                     AppTheme::default(),
-                    ElectricityCost::PRESETS[8],
+                    ElectricityCost::from_os(),
                     true,
                     CloseBehavior::default(),
                 ),
@@ -189,7 +169,6 @@ impl App {
                 electricity_cost,
                 custom_kwh_cost_input,
                 launch_on_startup: common::autostart::is_enabled(),
-                overlay_on: overlay_requested(),
                 show_setup,
                 theme,
                 database,
@@ -207,7 +186,7 @@ impl App {
 
     fn waiting_for_migration(database: Database) -> (Self, Task<Message>) {
         let current_page = Page::Dashboard;
-        let language = AppLanguage::default();
+        let language = AppLanguage::from_os();
         let theme = AppTheme::default();
 
         (
@@ -222,12 +201,11 @@ impl App {
                 settings_open: false,
                 info_modal_open: None,
                 language,
-                carbon_intensity: CarbonIntensity::PRESETS[8],
+                carbon_intensity: CarbonIntensity::from_os(),
                 custom_carbon_input: String::new(),
-                electricity_cost: ElectricityCost::PRESETS[8],
+                electricity_cost: ElectricityCost::from_os(),
                 custom_kwh_cost_input: String::new(),
                 launch_on_startup: common::autostart::is_enabled(),
-                overlay_on: overlay_requested(),
                 show_setup: false,
                 theme,
                 database,
@@ -259,14 +237,6 @@ impl App {
                 }
                 self.refresh_all_time_data();
                 self.tick_count += 1;
-                // Keep the footer's overlay toggle honest: the tray or the
-                // overlay's own right-click menu may have changed it behind our
-                // back, and the two processes only share a config file. Read at
-                // half the tick rate — it is a tiny file, and 2s lag is fine for
-                // a button label.
-                if self.tick_count % 2 == 0 {
-                    self.overlay_on = overlay_requested();
-                }
                 if self.tick_count == 1 || self.tick_count % 10 == 0 {
                     self.refresh_process_data();
                 }
@@ -305,7 +275,7 @@ impl App {
                         .filter(|&v| v > 0.0)
                         .unwrap_or(0.0);
                     self.carbon_intensity = CarbonIntensity {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         g_per_kwh: g,
                     };
                 } else {
@@ -318,13 +288,13 @@ impl App {
                 self.custom_carbon_input = text.clone();
                 if let Some(val) = text.parse::<f64>().ok().filter(|&v| v > 0.0) {
                     self.carbon_intensity = CarbonIntensity {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         g_per_kwh: val,
                     };
                     self.persist_ui_settings();
                 } else {
                     self.carbon_intensity = CarbonIntensity {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         g_per_kwh: 0.0,
                     };
                 }
@@ -358,7 +328,7 @@ impl App {
                         .filter(|&v| v >= 0.0)
                         .unwrap_or(0.0);
                     self.electricity_cost = ElectricityCost {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         price_per_kwh: v,
                         currency_symbol: self.electricity_cost.currency_symbol,
                         currency_code: self.electricity_cost.currency_code,
@@ -375,7 +345,7 @@ impl App {
                 let code = self.electricity_cost.currency_code;
                 if let Some(val) = text.parse::<f64>().ok().filter(|&v| v >= 0.0) {
                     self.electricity_cost = ElectricityCost {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         price_per_kwh: val,
                         currency_symbol: sym,
                         currency_code: code,
@@ -383,7 +353,7 @@ impl App {
                     self.persist_ui_settings();
                 } else {
                     self.electricity_cost = ElectricityCost {
-                        label: "Custom",
+                        country: CountryKey::Custom,
                         price_per_kwh: 0.0,
                         currency_symbol: sym,
                         currency_code: code,
@@ -393,42 +363,12 @@ impl App {
             }
             Message::ChangeCustomCurrency(curr) => {
                 self.electricity_cost = ElectricityCost {
-                    label: "Custom",
+                    country: CountryKey::Custom,
                     price_per_kwh: self.electricity_cost.price_per_kwh,
                     currency_symbol: curr.symbol,
                     currency_code: curr.code,
                 };
                 self.persist_ui_settings();
-                Task::none()
-            }
-            Message::ToggleOverlay(enabled) => {
-                self.overlay_on = enabled;
-                // The overlay polls its config file, so writing the request is
-                // enough; opening also clears pin over there, so the widget comes
-                // back interactive rather than locked.
-                if enabled {
-                    overlay::request_open();
-                } else {
-                    overlay::request_close();
-                }
-
-                if enabled {
-                    match std::env::current_exe() {
-                        Ok(exe) => {
-                            let mut command = Command::new(exe);
-                            command.arg("--overlay");
-                            #[cfg(target_os = "windows")]
-                            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                            match command.spawn() {
-                                Ok(_) => common::clog!("✓ Overlay launched"),
-                                Err(e) => common::clog!("✗ Failed to launch overlay: {e}"),
-                            }
-                        }
-                        Err(e) => common::clog!("✗ Failed to resolve executable path: {e}"),
-                    }
-                } else {
-                    common::clog!("✓ Overlay closing");
-                }
                 Task::none()
             }
             Message::ToggleLaunchOnStartup(enabled) => {
@@ -627,7 +567,7 @@ impl App {
         let content: Element<'_, Message, AppTheme> = Column::new()
             .push(self.header.view(self.language))
             .push(page_content)
-            .push(self.footer.view(self.language, self.overlay_on))
+            .push(self.footer.view(self.language))
             .into();
 
         if self.show_close_dialog {
@@ -648,7 +588,17 @@ impl App {
                 Message::CloseSettings,
             )
         } else if self.show_setup {
-            modal(content, self.setup_view(), Message::ConfirmSetup)
+            modal(
+                content,
+                setup_view(
+                    self.language,
+                    self.carbon_intensity,
+                    &self.custom_carbon_input,
+                    self.electricity_cost,
+                    &self.custom_kwh_cost_input,
+                ),
+                Message::ConfirmSetup,
+            )
         } else if let Some(ref target) = self.info_modal_open {
             modal(content, self.info_modal_view(target), Message::CloseInfoModal)
         } else {
@@ -955,15 +905,8 @@ impl App {
             }
         }
         match behavior {
-            // Window only: the app keeps running in the tray, so the overlay —
-            // simply another window of this app — stays up as well.
             CloseBehavior::WindowOnly => iced::exit(),
-            CloseBehavior::Everything => {
-                // Ask the overlay to close *before* this process terminates; it
-                // polls the shared config, so it shuts itself down.
-                request_overlay_close();
-                std::process::exit(common::EXIT_CODE_SHUTDOWN_ALL)
-            }
+            CloseBehavior::Everything => std::process::exit(common::EXIT_CODE_SHUTDOWN_ALL),
             CloseBehavior::Ask => Task::none(),
         }
     }
@@ -972,12 +915,12 @@ impl App {
         let carbon_str = if self.carbon_intensity.is_custom() {
             format!("{}", self.carbon_intensity.g_per_kwh)
         } else {
-            self.carbon_intensity.label.to_string()
+            self.carbon_intensity.country.code().to_string()
         };
         let kwh_str = if self.electricity_cost.is_custom() {
             format!("{}", self.electricity_cost.price_per_kwh)
         } else {
-            self.electricity_cost.label.to_string()
+            self.electricity_cost.country.code().to_string()
         };
         let settings = UiSettings {
             language: self.language.code().to_string(),
@@ -1038,125 +981,6 @@ impl App {
         }
 
         let content = content.align_x(Alignment::Center).push(buttons);
-
-        Container::new(content)
-            .width(Length::Fixed(520.0))
-            .padding(PADDING_XLARGE)
-            .class(ContainerStyle::ModalCard)
-            .into()
-    }
-
-    fn setup_view(&self) -> Element<'_, Message, AppTheme> {
-        let language = self.language;
-
-        let title = Text::new(setup_welcome_title(language))
-            .size(FONT_SIZE_HEADER)
-            .font(FONT_BOLD)
-            .width(Length::Fill);
-
-        let lang_label = Text::new(setup_choose_language(language)).size(FONT_SIZE_BODY);
-        let lang_picker = pick_list(AppLanguage::all(), Some(self.language), Message::ChangeLanguage)
-            .width(Length::Fill)
-            .padding(8);
-
-        let ci_label = Text::new(setup_choose_carbon(language)).size(FONT_SIZE_BODY);
-        let ci_picker = pick_list(
-            TranslatedCarbonIntensity::all(language),
-            Some(TranslatedCarbonIntensity::new(self.carbon_intensity, language)),
-            |tci| Message::ChangeCarbonIntensity(tci.intensity),
-        )
-        .width(Length::Fill)
-        .padding(8);
-
-        let custom_input_valid = self
-            .custom_carbon_input
-            .parse::<f64>()
-            .ok()
-            .filter(|&v| v > 0.0)
-            .is_some();
-
-        let carbon_section: Element<'_, Message, AppTheme> = if self.carbon_intensity.is_custom() {
-            let input = text_input(custom_carbon_placeholder(language), &self.custom_carbon_input)
-                .on_input(Message::CustomCarbonInput)
-                .width(Length::Fill)
-                .padding(8);
-            let mut col = Column::new().spacing(SPACING_SMALL).push(ci_picker).push(input);
-            if !self.custom_carbon_input.is_empty() && !custom_input_valid {
-                col = col.push(
-                    Text::new(custom_carbon_invalid(language))
-                        .size(FONT_SIZE_SMALL)
-                        .class(TextStyle::Muted),
-                );
-            }
-            col.into()
-        } else {
-            ci_picker.into()
-        };
-
-        let custom_kwh_valid = self
-            .custom_kwh_cost_input
-            .parse::<f64>()
-            .ok()
-            .filter(|&v| v >= 0.0)
-            .is_some();
-
-        let ec_label = Text::new(setup_choose_electricity(language)).size(FONT_SIZE_BODY);
-        let ec_picker = pick_list(
-            TranslatedElectricityCost::all(language),
-            Some(TranslatedElectricityCost::new(self.electricity_cost, language)),
-            |tec| Message::ChangeElectricityCost(tec.cost),
-        )
-        .width(Length::Fill)
-        .padding(8);
-
-        let electricity_section: Element<'_, Message, AppTheme> = if self.electricity_cost.is_custom() {
-            let input = text_input(custom_kwh_cost_placeholder(language), &self.custom_kwh_cost_input)
-                .on_input(Message::CustomKwhCostInput)
-                .width(Length::Fill)
-                .padding(8);
-            let currency_picker = pick_list(
-                Currency::ALL,
-                Some(self.electricity_cost.currency()),
-                Message::ChangeCustomCurrency,
-            )
-            .padding(8);
-            let mut col = Column::new().spacing(SPACING_SMALL).push(ec_picker).push(
-                Row::new()
-                    .spacing(4)
-                    .align_y(Alignment::Center)
-                    .push(input.width(Length::FillPortion(2)))
-                    .push(currency_picker.width(Length::FillPortion(2)))
-                    .push(Text::new("/kWh").size(FONT_SIZE_SMALL).class(TextStyle::Muted)),
-            );
-            if !self.custom_kwh_cost_input.is_empty() && !custom_kwh_valid {
-                col = col.push(
-                    Text::new(kwh_cost_invalid(language, self.electricity_cost.currency_symbol))
-                        .size(FONT_SIZE_SMALL)
-                        .class(TextStyle::Muted),
-                );
-            }
-            col.into()
-        } else {
-            ec_picker.into()
-        };
-
-        let can_confirm = (!self.carbon_intensity.is_custom() || custom_input_valid)
-            && (!self.electricity_cost.is_custom() || custom_kwh_valid);
-        let confirm_btn = button(Text::new(setup_confirm(language)).size(FONT_SIZE_BODY))
-            .class(ButtonStyle::Standard)
-            .on_press_maybe(can_confirm.then_some(Message::ConfirmSetup));
-
-        let content = Column::new()
-            .spacing(SPACING_LARGE)
-            .align_x(Alignment::Start)
-            .push(title)
-            .push(lang_label)
-            .push(lang_picker)
-            .push(ci_label)
-            .push(carbon_section)
-            .push(ec_label)
-            .push(electricity_section)
-            .push(confirm_btn);
 
         Container::new(content)
             .width(Length::Fixed(520.0))
