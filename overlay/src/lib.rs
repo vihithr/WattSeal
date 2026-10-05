@@ -263,6 +263,105 @@ mod tests {
     }
 
     #[test]
+    fn no_item_is_defined_both_always_and_for_one_platform() {
+        // **The bug that made the first Linux build fail**, twice in one file.
+        //
+        // `const WATTSEAL_EXE` was declared with no `cfg` *and* again under
+        // `#[cfg(not(target_os = "windows"))]`, and an old two-argument
+        // `set_click_through` stub was left behind next to the three-argument one
+        // that replaced it. Both compile perfectly on Windows — where the second
+        // arm is compiled out and the duplicate therefore does not exist — and
+        // neither does anywhere else.
+        //
+        // This is the shape of mistake a single-platform project cannot feel: the
+        // compiler is the only thing that would notice, and only on the platform
+        // nobody is building on. So the *source* is checked, here, on every
+        // platform.
+        //
+        // A name may be declared once unconditionally, or once per platform arm.
+        // What it may never be is declared unconditionally **and** in an arm: on
+        // that arm's platform it exists twice.
+        let files: [(&str, &str); 5] = [
+            ("winlayer.rs", include_str!("winlayer.rs")),
+            ("launcher.rs", include_str!("launcher.rs")),
+            ("source.rs", include_str!("source.rs")),
+            ("app.rs", include_str!("app.rs")),
+            ("lib.rs", include_str!("lib.rs")),
+        ];
+
+        let mut clashes: Vec<String> = Vec::new();
+
+        for (file, text) in files {
+            // name -> the gates seen for it. `""` means "no gate at all".
+            let mut gates: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let mut pending: Vec<String> = Vec::new();
+
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("#[cfg(") {
+                    pending.push(trimmed.to_string());
+                    continue;
+                }
+                if let Some(name) = declared_name(trimmed) {
+                    let gate = pending
+                        .iter()
+                        .find(|c| c.contains("target_os"))
+                        .cloned()
+                        .unwrap_or_default();
+                    gates.entry(name).or_default().push(gate);
+                }
+                // A blank line or any other item ends the attribute run.
+                pending.clear();
+            }
+
+            for (name, seen) in gates {
+                let unconditional = seen.iter().any(String::is_empty);
+                let conditional = seen.iter().any(|g| !g.is_empty());
+                if unconditional && conditional {
+                    clashes.push(format!(
+                        "{file}: `{name}` is declared both unconditionally and behind a platform `cfg`"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            clashes.is_empty(),
+            "these compile on one platform and nowhere else:\n  {}",
+            clashes.join("\n  ")
+        );
+    }
+
+    /// The name an item declares, if that line declares one.
+    ///
+    /// Deliberately narrow: only the declaration forms this crate uses, so a parse
+    /// this crude cannot mistake a call for a definition.
+    ///
+    /// **`pub const fn` is not optional.** Without it the line
+    /// `pub const fn click_through_supported() -> bool {` parses as the name `fn`,
+    /// which is what the first version of this did — and it then reported a clash
+    /// between two functions that are correctly paired.
+    fn declared_name(line: &str) -> Option<String> {
+        const PREFIXES: [&str; 9] = [
+            "pub const fn ",
+            "pub async fn ",
+            "pub const ",
+            "pub static ",
+            "pub fn ",
+            "const fn ",
+            "const ",
+            "static ",
+            "fn ",
+        ];
+
+        let rest = PREFIXES.iter().find_map(|prefix| line.strip_prefix(prefix))?;
+
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+
+        (!name.is_empty()).then_some(name)
+    }
+
+    #[test]
     fn a_report_from_an_earlier_run_does_not_outlive_it() {
         // The whole point of the file is that it describes the run that failed.
         // Left in place it describes whichever morning happened to fail, and

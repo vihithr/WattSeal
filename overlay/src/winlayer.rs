@@ -51,15 +51,6 @@ pub fn apply(_hwnd: u64, _alpha: f32) -> bool {
     false
 }
 
-/// No-op on non-Windows platforms.
-///
-/// The whole reach mechanism is Win32: there is no click-through to undo anywhere
-/// else, so there is nothing to hold a modifier for.
-#[cfg(not(target_os = "windows"))]
-pub fn set_click_through(_hwnd: u64, _enabled: bool) -> bool {
-    false
-}
-
 /// Whether mouse pass-through can actually be applied here.
 ///
 /// Only Windows is implemented; macOS (`setIgnoresMouseEvents`) and X11 (input

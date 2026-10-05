@@ -29,6 +29,12 @@ use std::{
 /// A path rather than a bare name on purpose. Starting `"WattSeal"` would let
 /// `PATH` decide which WattSeal runs, and the one that matters is the one whose
 /// database this widget reads.
+///
+/// **The Windows arm needs its own `cfg`, not just the other one.** Leaving it
+/// ungated defines the name twice on every other platform — which is how this
+/// shipped: it compiles here and nowhere else, because this is the only platform
+/// it has ever been built on.
+#[cfg(target_os = "windows")]
 const WATTSEAL_EXE: &str = "WattSeal.exe";
 #[cfg(not(target_os = "windows"))]
 const WATTSEAL_EXE: &str = "WattSeal";
