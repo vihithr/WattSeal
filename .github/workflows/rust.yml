@@ -25,10 +25,7 @@ on:
     paths:
       - "overlay/**"
       - ".github/workflows/rust.yml"
-  # Runs the whole pipeline by hand on whatever branch is checked out. There is
-  # no other way to run it: `push` and `pull_request` are the only triggers that
-  # fire on their own, and neither can be aimed at a branch without opening a pull
-  # request first.
+  # Runs the whole pipeline by hand on whatever branch is checked out.
   workflow_dispatch:
 
 permissions:
@@ -75,16 +72,32 @@ jobs:
             libxkbcommon-dev libwayland-dev \
             libssl-dev
 
+      # **Run from inside the crate, not `--manifest-path` from the root.**
+      #
+      # Cargo reads `.cargo/config.toml` starting from the *current directory* and
+      # walking up — not from the manifest's directory. The repository root has
+      # WattSeal's, which sets `-C panic=abort` on every non-Windows platform, and
+      # that cannot build a test harness:
+      #
+      #     error: building tests with panic=abort is not supported
+      #
+      # `overlay/.cargo/config.toml` appends `-C panic=unwind` to override it, but
+      # Cargo only reads that file if it is started somewhere on the way up from
+      # it. `working-directory` is what makes that true, and it is also simply how
+      # a person builds a crate of their own.
+      #
       # `--all-targets` matters more here than anywhere else in this repository.
       # Plain `cargo check` builds only libs and bins, so a test that does not
       # compile on the platform it is running on is invisible — which is how a
       # platform-specific test can sit in the tree, type-checked nowhere, waiting
       # for a runner that never looks at it.
-      - run: cargo check --manifest-path overlay/Cargo.toml --all-targets
+      - run: cargo check --all-targets
+        working-directory: overlay
 
       # On Linux this one test is not a formality. The overlay's "the database was
       # deleted under the running widget" check cannot run on Windows at all —
       # Windows refuses to unlink a file another handle has open — so on Unix is
       # the only place that behaviour is actually observed. Compiling it proves
       # nothing; running it does.
-      - run: cargo test --manifest-path overlay/Cargo.toml
+      - run: cargo test
+        working-directory: overlay

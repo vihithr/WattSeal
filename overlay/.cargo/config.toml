@@ -1,0 +1,38 @@
+# Why this file exists, and why it only works from in here.
+#
+# The repository's root has a `.cargo/config.toml` — WattSeal's — that sets
+# `-C panic=abort` on every platform that is not Windows:
+#
+#     [target.'cfg(not(target_os = "windows"))']
+#     rustflags = ["-C", "panic=abort"]
+#
+# That is a reasonable thing for a tray application to want, and it is upstream's
+# file, so it stays as it is. The problem is that Cargo reads configuration from
+# **the current directory upwards**, not from the manifest's directory — so
+# anything built from the repository root inherits it, `overlay/` included,
+# however independent this crate is otherwise.
+#
+# `panic = "abort"` cannot build a test harness. It fails with
+#
+#     error: building tests with panic=abort is not supported without
+#            `-Zpanic_abort_tests`
+#
+# which is exactly how the first Linux and macOS CI runs died.
+#
+# **Rustflags from nested configs are appended, not replaced**, so this could not
+# have been written as "no flags" — the parent's are already there. What it can do
+# is come *after* them, because for `-C` options the last one wins. `panic=unwind`
+# is written last and therefore overrides `panic=abort`, which is also what
+# `[profile.release]` in `Cargo.toml` asks for anyway.
+#
+# `--config` on the command line and the `RUSTFLAGS` environment variable both
+# take precedence over every file and are the other ways to do this. This one is
+# preferred because it asks nothing of the person building: `cd overlay && cargo
+# test` simply works, which is the entire promise of a standalone crate.
+#
+# The one thing it cannot fix is Cargo being started somewhere else. Running
+# `cargo test --manifest-path overlay/Cargo.toml` **from the repository root**
+# never reads this file, because the search starts at the root and this is not on
+# the way up. CI therefore changes into the directory first, as a person would.
+[target.'cfg(not(target_os = "windows"))']
+rustflags = ["-C", "panic=unwind"]

@@ -7,16 +7,16 @@ name: Overlay release
 # release job living in that file would simply never run — the release would be
 # "created" as a tag with no artifacts and no failing build to notice it by.
 #
-# This file triggers on tags and nothing else, with no `paths` filter to
-# interact with. It also runs the tests itself rather than depending on the other
-# workflow, because a tag can be pushed to a commit the check workflow never saw.
+# This file triggers on tags and nothing else, with no `paths` filter to interact
+# with. It also runs the tests itself rather than depending on the other workflow,
+# because a tag can be pushed to a commit the check workflow never saw.
 
 on:
   push:
     tags:
       - "overlay-*"
   # Every step below is the same one a tag would run, so this is how to rehearse a
-  # release without publishing one.
+  # release without publishing one — `publish` is gated on a real tag.
   workflow_dispatch:
 
 permissions:
@@ -55,10 +55,21 @@ jobs:
             libxkbcommon-dev libwayland-dev \
             libssl-dev
 
-      # A release is not the place to find out the tests do not compile. Both of
+      # **From inside the crate, not `--manifest-path` from the root.** Cargo reads
+      # `.cargo/config.toml` from the current directory upwards, not from the
+      # manifest's directory — and the repository root has WattSeal's, which sets
+      # `-C panic=abort` on every non-Windows platform. That cannot build a test
+      # harness. `overlay/.cargo/config.toml` appends `panic=unwind` to override it,
+      # but Cargo only reads that file if it is started somewhere on the way up
+      # from it.
+      #
+      # A release is not the place to find out the tests do not compile, so both of
       # these run before anything is built for shipping.
-      - run: cargo check --manifest-path overlay/Cargo.toml --all-targets
-      - run: cargo test --manifest-path overlay/Cargo.toml
+      - run: cargo check --all-targets
+        working-directory: overlay
+
+      - run: cargo test
+        working-directory: overlay
 
   build:
     name: Build (${{ matrix.name }})
@@ -71,15 +82,12 @@ jobs:
         include:
           - os: windows-latest
             name: Windows x64
-            built: overlay/target/release/wattseal-overlay.exe
             shipped: wattseal-overlay-windows-x64.exe
           - os: ubuntu-latest
             name: Linux x64
-            built: overlay/target/release/wattseal-overlay
             shipped: wattseal-overlay-linux-x64
           - os: macos-latest
             name: macOS
-            built: overlay/target/release/wattseal-overlay
             shipped: wattseal-overlay-macos
     steps:
       - uses: actions/checkout@v7
@@ -104,7 +112,8 @@ jobs:
       # `overlay/target` — not the repository root's. The first version of this
       # workflow looked in `target/release/` and would have failed the release on
       # every platform with `if-no-files-found: error`.
-      - run: cargo build --release --manifest-path overlay/Cargo.toml
+      - run: cargo build --release
+        working-directory: overlay
 
       # Renamed to say which platform it is. Three files called
       # `wattseal-overlay` are three files a downloader has to guess between.
@@ -114,8 +123,19 @@ jobs:
       - name: Name the artifact for its platform
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp "${{ matrix.built }}" "dist/${{ matrix.shipped }}"
+
+          # The binary is `wattseal-overlay.exe` on Windows and
+          # `wattseal-overlay` everywhere else. Testing for the file rather than
+          # branching on the runner means one code path, and a wrong guess fails
+          # loudly here instead of uploading nothing.
+          if [ -f overlay/target/release/wattseal-overlay.exe ]; then
+            cp overlay/target/release/wattseal-overlay.exe "dist/${{ matrix.shipped }}"
+          else
+            cp overlay/target/release/wattseal-overlay "dist/${{ matrix.shipped }}"
+          fi
+
           cp doc/overlay.md dist/overlay.md
           ls -l dist
 
@@ -131,9 +151,9 @@ jobs:
     # **Only for a real tag**, which is what makes `workflow_dispatch` a rehearsal
     # rather than a way to accidentally publish a branch name as a release.
     #
-    # It exists because the two platforms this has never been built on are the two
-    # that can fail: the widget has only ever been compiled and run on Windows. A
-    # rehearsal on all three is how to find that out *before* a tag exists, since
+    # It exists because the two platforms this had never been built on are the two
+    # that failed first: the widget had only ever been compiled and run on
+    # Windows. A rehearsal is how to find that out *before* a tag exists, since
     # `needs: build` means one platform failing produces no release at all.
     if: startsWith(github.ref, 'refs/tags/overlay-')
     runs-on: ubuntu-latest

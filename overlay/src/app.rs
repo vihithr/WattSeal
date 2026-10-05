@@ -420,7 +420,7 @@ impl OverlayApp {
             return;
         };
 
-        match crate::launcher::start_if_needed(self.config.launch_wattseal, &directory, &self.source.path()) {
+        match crate::launcher::start_if_needed(self.config.launch_wattseal, &directory, self.source.path()) {
             Ok(child) => self.launched = child,
             // `AlreadyRunning` and `Disabled` are the ordinary answers and worth
             // nothing on screen. `NotInstalled` is not: the user will otherwise
@@ -3067,12 +3067,19 @@ mod tests {
         assert_eq!(crate::AppLanguage::all().len(), 5);
     }
 
+    /// One translated string, with the name it is called by.
+    ///
+    /// A named alias rather than the type written out at the `let`: clippy reads a
+    /// bare `(&str, fn(Language) -> &'static str)` array as too complex to follow,
+    /// and having a name for it says what the pair *is*.
+    type TranslatedString = (&'static str, fn(Language) -> &'static str);
+
     #[test]
     fn every_language_the_widget_offers_is_fully_translated() {
         // A language offered but not translated shows a panel half in English,
         // which is worse than not offering it: the user picked something and got
         // a mixture, with nothing saying which parts were meant to be that way.
-        let panel_strings: [(&str, fn(Language) -> &'static str); 8] = [
+        let panel_strings: [TranslatedString; 8] = [
             ("section_appearance", translations::section_appearance),
             ("section_window", translations::section_window),
             ("section_content", translations::section_content),

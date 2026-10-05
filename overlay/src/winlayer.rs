@@ -192,7 +192,7 @@ fn start_reach_watcher(hwnd: u64) -> bool {
     }
     let _ = STARTED.set(());
 
-    let spawned = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("wattseal-overlay-reach".to_string())
         .spawn(move || {
             let mut transparent: Option<bool> = None;
@@ -230,9 +230,7 @@ fn start_reach_watcher(hwnd: u64) -> bool {
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
         })
-        .is_ok();
-
-    spawned
+        .is_ok()
 }
 
 /// Sets or clears `WS_EX_TRANSPARENT`, and nothing else.
@@ -661,23 +659,34 @@ pub fn set_escape_hotkey(_hotkey: Hotkey) -> bool {
     false
 }
 
+// Everything below is used only by the Windows implementation above, and is
+// gated to match. Ungated it compiles here and warns as dead code everywhere
+// else — which the first macOS run reported, six times, as the only thing it had
+// to say about this file.
+
 /// A press the shortcut thread has seen and the widget has not yet acted on.
+#[cfg(target_os = "windows")]
 static PRESSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the shortcut could be registered at all.
+#[cfg(target_os = "windows")]
 static REGISTERED_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the thread has answered the most recent bind request.
+#[cfg(target_os = "windows")]
 static SETTLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+#[cfg(target_os = "windows")]
 fn set_registered(ok: bool) {
     REGISTERED_OK.store(ok, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[cfg(target_os = "windows")]
 fn shortcut_registered() -> bool {
     REGISTERED_OK.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+#[cfg(target_os = "windows")]
 fn shortcut_settled() -> bool {
     SETTLED.load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -694,8 +703,16 @@ fn clear_settled() {
 /// Takes the press rather than only looking at it, so three presses inside one
 /// tick are still one toggle — the same intent as `MOD_NOREPEAT`, that a held key
 /// is one press and not a stream of them.
+#[cfg(target_os = "windows")]
 pub fn poll_escape_hotkey() -> bool {
     PRESSED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// See the Windows variant.
+#[cfg(not(target_os = "windows"))]
+pub fn poll_escape_hotkey() -> bool {
+    // No shortcut can be registered, so no press can arrive.
+    false
 }
 
 #[cfg(test)]
