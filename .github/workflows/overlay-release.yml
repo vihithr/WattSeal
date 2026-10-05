@@ -1,0 +1,187 @@
+name: Overlay release
+
+# Cutting a release, kept in its own file on purpose.
+#
+# The check workflow triggers on **branches** with a `paths` filter, and GitHub
+# evaluates `branches` and `paths` as an AND. A tag push matches neither, so a
+# release job living in that file would simply never run — the release would be
+# "created" as a tag with no artifacts and no failing build to notice it by.
+#
+# This file triggers on tags and nothing else, with no `paths` filter to
+# interact with. It also runs the tests itself rather than depending on the other
+# workflow, because a tag can be pushed to a commit the check workflow never saw.
+
+on:
+  push:
+    tags:
+      - "overlay-*"
+  # Every step below is the same one a tag would run, so this is how to rehearse a
+  # release without publishing one.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: overlay
+
+      # iced pulls GTK, Wayland and fontconfig headers on Linux; without these the
+      # test binary does not build, which is a confusing way to find out.
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev pkg-config \
+            libxkbcommon-dev libwayland-dev \
+            libssl-dev
+
+      # A release is not the place to find out the tests do not compile. Both of
+      # these run before anything is built for shipping.
+      - run: cargo check --manifest-path overlay/Cargo.toml --all-targets
+      - run: cargo test --manifest-path overlay/Cargo.toml
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows x64
+            built: overlay/target/release/wattseal-overlay.exe
+            shipped: wattseal-overlay-windows-x64.exe
+          - os: ubuntu-latest
+            name: Linux x64
+            built: overlay/target/release/wattseal-overlay
+            shipped: wattseal-overlay-linux-x64
+          - os: macos-latest
+            name: macOS
+            built: overlay/target/release/wattseal-overlay
+            shipped: wattseal-overlay-macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: overlay
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev pkg-config \
+            libxkbcommon-dev libwayland-dev \
+            libssl-dev
+
+      # `overlay/` is its own workspace, so its target directory is
+      # `overlay/target` — not the repository root's. The first version of this
+      # workflow looked in `target/release/` and would have failed the release on
+      # every platform with `if-no-files-found: error`.
+      - run: cargo build --release --manifest-path overlay/Cargo.toml
+
+      # Renamed to say which platform it is. Three files called
+      # `wattseal-overlay` are three files a downloader has to guess between.
+      #
+      # Bash on every runner, Windows included, so this is one code path rather
+      # than three that can drift.
+      - name: Name the artifact for its platform
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.built }}" "dist/${{ matrix.shipped }}"
+          cp doc/overlay.md dist/overlay.md
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.shipped }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    # **Only for a real tag**, which is what makes `workflow_dispatch` a rehearsal
+    # rather than a way to accidentally publish a branch name as a release.
+    #
+    # It exists because the two platforms this has never been built on are the two
+    # that can fail: the widget has only ever been compiled and run on Windows. A
+    # rehearsal on all three is how to find that out *before* a tag exists, since
+    # `needs: build` means one platform failing produces no release at all.
+    if: startsWith(github.ref, 'refs/tags/overlay-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # The one job that writes anything, and the only reason the permission
+      # exists at all.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `gh` rather than a third-party release action: it is preinstalled on every
+      # runner, so publishing a release adds no dependency to the supply chain of
+      # a program whose whole selling point is that it is a small thing you can
+      # read.
+      - name: Attach the binaries to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+
+          # A heredoc rather than `--notes "..."`: the notes are several lines with
+          # backticks and an apostrophe in them, and YAML block scalars do not
+          # process escapes — so a quoted string ends up depending on how two
+          # languages at once treat the same backslash.
+          cat > notes.md <<'NOTES'
+          A standalone always-on-top power widget for the official WattSeal.
+
+          Unpack the binary next to `WattSeal.exe` and run it. It links none of
+          WattSeal's code, reads its database read-only, and starts WattSeal for you
+          if it is not already running.
+
+          See `overlay.md` among the assets for the full documentation.
+          NOTES
+
+          # Re-runnable. A release that already exists is added to rather than
+          # fought with, so re-cutting a tag after a partial failure does not need
+          # the tag deleted first.
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --title "WattSeal Overlay $GITHUB_REF_NAME" \
+              --notes-file notes.md
+          fi
+
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

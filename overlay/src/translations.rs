@@ -1,50 +1,14 @@
 //! Overlay translations.
 //!
-//! The overlay is a standalone crate that must not depend on `ui` — doing so
+//! The overlay is a standalone program that must not depend on `ui` — doing so
 //! would drag the whole dashboard into the overlay process — so the handful of
-//! strings the overlay itself shows live here. The language is read from the
-//! same place the dashboard keeps it (the `ui_settings` row), so the overlay
-//! simply follows whatever language the user picked there.
+//! strings the overlay itself shows live here. The *language* list is the
+//! second copy: it also exists in the dashboard, but importing it from `common`
+//! is exactly what would tie this binary to WattSeal's source tree. What keeps
+//! the two in agreement is the **code** in the `ui_settings` row, which is data.
+//! See [`crate::language`] for what that duplication costs and what holds it.
 
-use common::Database;
-
-/// Languages the dashboard ships, identified by the codes it stores.
-///
-/// Mirrors `ui::types::AppLanguage`; kept local to this crate for the
-/// dependency reason described above.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Language {
-    #[default]
-    English,
-    German,
-    French,
-    Chinese,
-    Romanian,
-}
-
-impl Language {
-    /// Parses the code stored in `ui_settings.language` ("EN", "ZH", …).
-    pub fn from_code(code: &str) -> Self {
-        match code.to_ascii_uppercase().as_str() {
-            "DE" => Self::German,
-            "FR" => Self::French,
-            "ZH" => Self::Chinese,
-            "RO" => Self::Romanian,
-            _ => Self::English,
-        }
-    }
-
-    /// The language the dashboard is currently set to.
-    ///
-    /// Falls back to English when there is no database or no saved settings
-    /// yet, which is also what a standalone `--overlay` run sees.
-    pub fn from_database(database: Option<&Database>) -> Self {
-        database
-            .and_then(|database| database.load_ui_settings().ok().flatten())
-            .map(|settings| Self::from_code(&settings.language))
-            .unwrap_or_default()
-    }
-}
+pub use crate::language::AppLanguage as Language;
 
 /// A value that knows how to label itself in a given language.
 pub trait Localize {
@@ -237,17 +201,6 @@ pub fn label_text_size(language: Language) -> &'static str {
         Language::French => "Taille du texte",
         Language::Chinese => "文字大小",
         Language::Romanian => "Mărime text",
-    }
-}
-
-/// Matches the dashboard's own wording for this setting.
-pub fn label_theme(language: Language) -> &'static str {
-    match language {
-        Language::English => "Theme",
-        Language::German => "Darstellung",
-        Language::French => "Thème",
-        Language::Chinese => "主题",
-        Language::Romanian => "Temă",
     }
 }
 
@@ -630,26 +583,262 @@ impl Localize for crate::config::Transparency {
     }
 }
 
+impl Localize for crate::language::AppLanguage {
+    /// Always the native name, whatever the panel's language is.
+    ///
+    /// This is the one pick-list on the panel that is deliberately *not*
+    /// translated, and the reason is the one that matters when you cannot read
+    /// the panel: the list is how you get out of a language you do not read. The
+    /// other pickers name colours and layouts; this one names the languages, and
+    /// a language is only findable in its own name.
+    fn localize(&self, _language: Language) -> &'static str {
+        self.native_name()
+    }
+}
+
 impl Localize for crate::theme::ThemeChoice {
     fn localize(&self, language: Language) -> &'static str {
         use crate::theme::ThemeChoice;
 
         match self {
+            // "Automatic" is the state that follows the dashboard, which is the
+            // default — it says what the widget is doing rather than what the
+            // dashboard happens to be set to right now.
+            ThemeChoice::Auto => match language {
+                Language::German => "Automatisch",
+                Language::French => "Automatique",
+                Language::Chinese => "自动",
+                Language::Romanian => "Automat",
+                _ => "Automatic",
+            },
             ThemeChoice::Dark => match language {
-                Language::English => "Dark",
                 Language::German => "Dunkel",
                 Language::French => "Sombre",
                 Language::Chinese => "深色",
                 Language::Romanian => "Întunecat",
+                _ => "Dark",
             },
             ThemeChoice::Light => match language {
-                Language::English => "Light",
                 Language::German => "Hell",
                 Language::French => "Clair",
                 Language::Chinese => "浅色",
                 Language::Romanian => "Luminos",
+                _ => "Light",
             },
         }
+    }
+}
+
+/// The label for the language picker itself.
+///
+/// Shown in the language the picker is *currently* in, which is the only one
+/// guaranteed to be readable: a user who cannot read the panel cannot find the
+/// row that fixes it.
+pub fn label_language(language: Language) -> &'static str {
+    match language {
+        Language::German => "Sprache",
+        Language::French => "Langue",
+        Language::Chinese => "语言",
+        Language::Romanian => "Limbă",
+        _ => "Language",
+    }
+}
+
+/// A hint under the language row, saying where the current choice comes from.
+///
+/// The point is that a language that silently changed because a dashboard opened
+/// looks like a bug; saying "following WattSeal" turns the same event into a
+/// sentence the user can act on.
+pub fn hint_language_follows_dashboard(language: Language) -> &'static str {
+    match language {
+        Language::German => "Folgt der WattSeal-Einstellung",
+        Language::French => "Suit le réglage de WattSeal",
+        Language::Chinese => "跟随 WattSeal 的设置",
+        Language::Romanian => "Urmește setarea din WattSeal",
+        _ => "Following WattSeal's setting",
+    }
+}
+
+/// The counterpart hint for a language the user has pinned here.
+///
+/// Saying so matters more than for the automatic case: the user *did* choose
+/// this, and the next thing that happens is WattSeal reporting a different
+/// language and being ignored. Silently ignoring it would read as a bug.
+pub fn hint_language_override(language: Language) -> &'static str {
+    match language {
+        Language::German => "Überschreibt die WattSeal-Einstellung",
+        Language::French => "Remplace le réglage de WattSeal",
+        Language::Chinese => "覆盖 WattSeal 的设置",
+        Language::Romanian => "Suprascrie setarea din WattSeal",
+        _ => "Overrides WattSeal's setting",
+    }
+}
+
+/// There is no WattSeal beside the executable to start.
+///
+/// Says what to do about it rather than only what is wrong, because the reader of
+/// this line is looking at a widget that shows nothing and has just been told
+/// nothing is wrong — the second half is what turns a sentence into a way out.
+pub fn status_not_installed(language: Language) -> &'static str {
+    match language {
+        Language::German => "WattSeal nicht gefunden — neben der Datei ablegen",
+        Language::French => "WattSeal introuvable — à placer à côté du fichier",
+        Language::Chinese => "没找到 WattSeal — 请放到本程序旁边",
+        Language::Romanian => "WattSeal negăsit — puneți-l lângă fișier",
+        _ => "WattSeal not found — put it next to this file",
+    }
+}
+
+/// A collector was started and has not produced its first sample yet.
+///
+/// Present tense and no progress bar, because there is nothing to report progress
+/// about — it either starts or it does not, and the next state says which.
+pub fn status_starting(language: Language) -> &'static str {
+    match language {
+        Language::German => "WattSeal wird gestartet …",
+        Language::French => "Démarrage de WattSeal …",
+        Language::Chinese => "正在启动 WattSeal …",
+        Language::Romanian => "Se pornește WattSeal …",
+        _ => "Starting WattSeal …",
+    }
+}
+
+/// Launching is switched off and there is nothing to read.
+///
+/// Names the setting, because the setting is why: without saying so the same
+/// screen appears for a missing database and for a deliberate choice, and the
+/// user has no way to tell which they are looking at.
+pub fn status_launch_disabled(language: Language) -> &'static str {
+    match language {
+        Language::German => "WattSeal läuft nicht — Starten ist in den Einstellungen aus",
+        Language::French => "WattSeal n'est pas lancé — démarrage désactivé dans les réglages",
+        Language::Chinese => "WattSeal 未运行 — 设置里关掉了自动启动",
+        Language::Romanian => "WattSeal nu rulează — pornirea este dezactivată în setări",
+        _ => "WattSeal is not running — launching is off in the settings",
+    }
+}
+
+/// The collector has stopped writing to a database that still exists.
+///
+/// Deliberately not showing how long: a number that counts up beside a frozen
+/// reading is a second thing to keep an eye on, and the sentence has already
+/// said the only useful part.
+pub fn status_stalled(language: Language) -> &'static str {
+    match language {
+        Language::German => "WattSeal schreibt keine Werte mehr",
+        Language::French => "WattSeal n'écrit plus de mesures",
+        Language::Chinese => "WattSeal 已停止写入读数",
+        Language::Romanian => "WattSeal nu mai scrie măsurători",
+        _ => "WattSeal has stopped writing readings",
+    }
+}
+
+/// The database is at a generation this build does not read.
+///
+/// Shown next to numbers that *are* being shown, so it has to read as a note
+/// rather than as an error: the figures below it are real, and hiding them would
+/// be a bigger lie than saying where they came from.
+pub fn status_foreign_generation(language: Language) -> &'static str {
+    match language {
+        Language::German => "Neuere Datenbank — Zahlen bleiben, Bezeichnungen nicht",
+        Language::French => "Base plus récente — chiffres affichés, libellés non",
+        Language::Chinese => "数据库较新 — 数字照常，标签不可用",
+        Language::Romanian => "Bază mai nouă — cifrele rămân, etichetele nu",
+        _ => "Newer database — numbers kept, labels unavailable",
+    }
+}
+
+/// The shortcut could not be registered — usually because another program has it.
+///
+/// No key is quoted, because there is none to quote; that is the point of saying
+/// this instead of naming one that would do nothing.
+pub fn hint_escape_unavailable(language: Language) -> &'static str {
+    match language {
+        Language::German => "Kein Tastenkürzel verfügbar — im overlay_config.json lösen",
+        Language::French => "Aucun raccourci disponible — libérer dans overlay_config.json",
+        Language::Chinese => "快捷键不可用 — 在 overlay_config.json 里解开",
+        Language::Romanian => "Nicio tastă rapidă — eliberează în overlay_config.json",
+        _ => "No shortcut available — release it in overlay_config.json",
+    }
+}
+
+/// Shown while the widget is pinned with click-through on.
+///
+/// **The widget cannot be clicked, so this is the only way it can help.** The
+/// escape hatch used to be the dashboard's hide-and-show, which released the pin
+/// from another process; there is no such process now, and restarting does not
+/// help because the pin is written to the config file. So the stuck widget has to
+/// say so itself, in words it can still be *read* — the one thing a
+/// click-through window can still do.
+pub fn hint_pinned_escape(language: Language) -> &'static str {
+    match language {
+        Language::German => "Angeheftet · in overlay_config.json pin_mode auf false",
+        Language::French => "Épinglé · dans overlay_config.json, pin_mode à false",
+        Language::Chinese => "已固定 · 在 overlay_config.json 里把 pin_mode 设为 false",
+        Language::Romanian => "Fixat · în overlay_config.json, pin_mode pe false",
+        _ => "Pinned · set pin_mode false in overlay_config.json",
+    }
+}
+
+/// The button that starts listening for a new shortcut.
+pub fn hotkey_rebind(language: Language, current: &str) -> String {
+    match language {
+        Language::German => format!("Tastenkürzel ändern ({current})"),
+        Language::French => format!("Changer le raccourci ({current})"),
+        Language::Chinese => format!("更改快捷键（现在是 {current}）"),
+        Language::Romanian => format!("Schimbă scurtătura ({current})"),
+        _ => format!("Change shortcut (now {current})"),
+    }
+}
+
+/// What the panel says while it is waiting for a key.
+///
+/// Says how to get out as well as how to get in: a capture mode with no stated
+/// exit is the same trap this whole feature exists to undo.
+pub fn hotkey_capture_prompt(language: Language) -> &'static str {
+    match language {
+        Language::German => "Neue Tastenkombination drücken · Esc bricht ab",
+        Language::French => "Appuyez sur la nouvelle combinaison · Échap pour annuler",
+        Language::Chinese => "请按下新的组合键 · 按 Esc 取消",
+        Language::Romanian => "Apăsați noua combinație · Esc anulează",
+        _ => "Press the new combination · Esc cancels",
+    }
+}
+
+/// Why the combination just pressed cannot be used.
+pub fn hotkey_capture_refused(language: Language, reason: &str) -> String {
+    // `reason` comes from the platform and is English; it is quoted rather than
+    // translated because only two sentences exist and both name keys, which are
+    // not translated either.
+    let prefix = match language {
+        Language::German => "Nicht möglich:",
+        Language::French => "Impossible :",
+        Language::Chinese => "不可以：",
+        Language::Romanian => "Imposibil:",
+        _ => "Cannot use that:",
+    };
+    format!("{prefix} {reason}")
+}
+
+/// The button that leaves capture without binding anything.
+pub fn hotkey_cancel(language: Language) -> &'static str {
+    match language {
+        Language::German => "Abbrechen",
+        Language::French => "Annuler",
+        Language::Chinese => "取消",
+        Language::Romanian => "Anulează",
+        _ => "Cancel",
+    }
+}
+
+/// The label for the theme picker.
+pub fn label_theme(language: Language) -> &'static str {
+    match language {
+        Language::German => "Farbschema",
+        Language::French => "Thème",
+        Language::Chinese => "主题",
+        Language::Romanian => "Temă",
+        _ => "Theme",
     }
 }
 
@@ -781,42 +970,29 @@ impl Localize for crate::config::TextColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{BgColor, Density, FontSize, Layout, Metric, TextColor, Transparency},
-        theme::ThemeChoice,
-    };
+    use crate::config::{BgColor, Density, FontSize, Layout, Metric, TextColor, Transparency};
 
-    /// Every language the dashboard ships, so that adding one over there cannot
-    /// quietly leave the checks below half-done.
-    const LANGUAGES: &[Language] = &[
-        Language::English,
-        Language::German,
-        Language::French,
-        Language::Chinese,
-        Language::Romanian,
-    ];
+    /// Every language the application ships, so that adding one cannot quietly
+    /// leave the checks below half-done. Taken from the shared list rather than
+    /// written out again, for the reason in the module docs.
+    const LANGUAGES: &[Language] = Language::all();
 
     #[test]
-    fn parses_the_codes_the_dashboard_stores() {
-        assert_eq!(Language::from_code("EN"), Language::English);
-        assert_eq!(Language::from_code("DE"), Language::German);
-        assert_eq!(Language::from_code("FR"), Language::French);
-        assert_eq!(Language::from_code("ZH"), Language::Chinese);
-        assert_eq!(Language::from_code("RO"), Language::Romanian);
-    }
-
-    #[test]
-    fn an_unsaved_or_unknown_code_falls_back_to_english() {
-        assert_eq!(Language::from_code(""), Language::English);
-        assert_eq!(Language::from_code("xx"), Language::English);
+    fn the_languages_under_test_are_the_ones_the_dashboard_ships() {
+        // `all()` is the single source of truth, so this is really a check that
+        // the list is not empty and has no duplicates to hide a gap behind it.
+        assert!(!LANGUAGES.is_empty());
+        let mut codes: Vec<&str> = LANGUAGES.iter().map(|language| language.code()).collect();
+        let count = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), count, "two languages share a stored code");
     }
 
     #[test]
     fn wording_matches_the_dashboard_where_the_setting_already_exists() {
         assert_eq!(menu_settings(Language::German), "Einstellungen");
         assert_eq!(menu_settings(Language::Chinese), "设置");
-        assert_eq!(label_theme(Language::German), "Darstellung");
-        assert_eq!(label_theme(Language::Chinese), "主题");
         assert_eq!(metric_name(Language::German, Metric::Total), "Gesamt");
         assert_eq!(metric_name(Language::Chinese, Metric::Network), "网络");
     }
@@ -829,31 +1005,86 @@ mod tests {
 
     #[test]
     fn every_option_is_labelled_in_every_language() {
+        // Every assertion here names the language and the option it failed on.
+        // Without that, the only thing a failure says is "somewhere in a nested
+        // loop of five languages and sixty options", which is the whole table to
+        // search by hand.
+        fn labelled(text: &str, language: Language, what: &str) {
+            assert!(!text.trim().is_empty(), "{what} has no text for {language}");
+        }
+
         for &language in LANGUAGES {
             for &color in BgColor::ALL {
-                assert!(!color.localize(language).is_empty());
+                labelled(color.localize(language), language, "background colour");
             }
             for &color in TextColor::ALL {
-                assert!(!color.localize(language).is_empty());
+                labelled(color.localize(language), language, "text colour");
             }
             for &layout in Layout::ALL {
-                assert!(!layout.localize(language).is_empty());
+                labelled(layout.localize(language), language, "layout");
             }
             for &density in Density::ALL {
-                assert!(!density.localize(language).is_empty());
+                labelled(density.localize(language), language, "density");
             }
             for &size in FontSize::ALL {
-                assert!(!size.localize(language).is_empty());
+                labelled(size.localize(language), language, "text size");
             }
             for &mode in Transparency::ALL {
-                assert!(!mode.localize(language).is_empty());
-            }
-            for &theme in ThemeChoice::ALL {
-                assert!(!theme.localize(language).is_empty());
+                labelled(mode.localize(language), language, "transparency mode");
             }
             for &metric in Metric::ALL {
-                assert!(!metric.localize(language).is_empty());
-                assert!(!metric_short_name(language, metric).is_empty());
+                labelled(metric.localize(language), language, "metric");
+                labelled(metric_short_name(language, metric), language, "metric short name");
+            }
+        }
+    }
+
+    #[test]
+    fn no_label_is_the_empty_string_in_any_language() {
+        // A missing translation used to show up as a blank row rather than as a
+        // failure, so the per-language tables are swept for empties. `LANGUAGES`
+        // is the dashboard's own list, so a language added there is swept here.
+        fn check(text: &'static str, what: &str) {
+            assert!(!text.trim().is_empty(), "{what} has no text for a language");
+        }
+
+        for &language in LANGUAGES {
+            check(menu_resume(language), "menu resume");
+            check(menu_settings(language), "menu settings");
+            check(menu_pin(language), "menu pin");
+            check(menu_unpin(language), "menu unpin");
+            check(menu_exit(language), "menu exit");
+            check(section_appearance(language), "section appearance");
+            check(section_window(language), "section window");
+            check(section_content(language), "section content");
+            check(label_opacity(language), "opacity");
+            check(label_bg_color(language), "background colour");
+            check(label_text_color(language), "text colour");
+            check(label_transparency(language), "transparency");
+            check(label_shadow(language), "shadow");
+            check(label_layout(language), "layout");
+            check(label_density(language), "density");
+            check(label_text_size(language), "text size");
+            check(label_decimals(language), "decimals");
+            check(label_refresh(language), "refresh");
+            check(label_show_labels(language), "show labels");
+            check(label_show_units(language), "show units");
+            check(label_short_labels(language), "short labels");
+            check(label_always_on_top(language), "always on top");
+            check(label_pin_click_through(language), "click-through");
+            check(label_width(language), "width");
+            check(label_top_count(language), "top-app count");
+            check(button_done(language), "done");
+            check(button_quit_overlay(language), "quit");
+            check(hint_pin_unavailable(language), "pin hint");
+            check(hint_shadow_unavailable(language), "shadow hint");
+            check(hint_opacity_layered(language), "layered opacity hint");
+            check(hint_opacity_surface(language), "surface opacity hint");
+            check(hint_opacity_off(language), "opaque opacity hint");
+            check(metric_top_apps_setting(language), "top apps setting");
+            for &metric in Metric::ALL {
+                check(metric_name(language, metric), "metric name");
+                check(metric_short_name(language, metric), "metric short name");
             }
         }
     }

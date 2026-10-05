@@ -111,27 +111,61 @@ Run the app normally, WattSeal will work without admin privileges.
 
 ## Overlay widget
 
-WattSeal can also show its live metrics in a compact **always-on-top overlay**, so you can keep an
-eye on power draw without leaving the dashboard open — including on top of a full-screen game.
+> **This widget is a fork addition, not part of upstream WattSeal.** It is developed here, in this
+> repository, and is not maintained by the upstream project. Please report anything about it —
+> including crashes that happen only with the overlay running — **to this repository's issue
+> tracker**, not upstream's.
+
+**WattSeal Overlay** is a separate small program that shows live power metrics in a compact
+**always-on-top** window, so you can keep an eye on power draw without leaving the dashboard open —
+including on top of a full-screen game.
+
+It is a **standalone program**, not a feature of this build. That is the point: it runs against the
+**official WattSeal**, it links none of WattSeal's code, and an upstream release never needs a
+rebuild here. Unpack it next to WattSeal and start `wattseal-overlay` — if WattSeal is not already
+running, the widget starts it.
 
 | | |
 |---|---|
-| **Open it** | `Show overlay` in the dashboard footer, `Toggle Overlay` in the tray menu, or `WattSeal --overlay` |
+| **Start it** | Run `wattseal-overlay` — it starts WattSeal for you when there is nothing to read, so one icon is enough |
 | **Move it** | Drag it with the left mouse button |
-| **Menu** | Right-click for `Resume` / `Settings` / `Pin` / `Exit` |
+| **Menu** | Right-click for `Settings` / `Pin` / `Hide overlay` |
 | **Pin it** | Locks the position, and on Windows also makes the widget ignore the mouse so your clicks reach the app underneath |
-| **Style it** | Vertical or horizontal layout, three densities, three text sizes, light/dark theme, background and text colors, opacity, drop shadow |
-| **Trim it** | Choose which metrics appear and in which order (total, CPU, GPU, RAM, top apps), shorten the labels, set the decimals and the refresh interval |
-| **Language** | Follows the language you pick in the dashboard, with no restart |
+| **Style it** | Vertical or horizontal layout, three densities, three text sizes, background and text colors, opacity, drop shadow |
+| **Trim it** | Choose which metrics appear and in which order (total, CPU, GPU, RAM, disk, network, top apps), shorten the labels, set the decimals and the refresh interval |
+| **Language and theme** | Follow the dashboard by default; pick your own in the settings panel |
 
 The widget hugs its numbers — the height always follows the content, and the width is whatever the
-numbers need, capped by the `Width` setting. It never wraps onto a second line. A pinned widget is
-deliberately not draggable, and with click-through on it does not take the mouse either: release it
-from the tray menu, or by hiding the overlay from the dashboard footer and showing it again. Only
-one overlay runs at a time, so opening it twice leaves the first one alone.
+numbers need, capped by the `Width` setting. It never wraps onto a second line, and it never cuts a
+reading in half: if the cap is too narrow, it gives up labels first and whole metrics last. A pinned
+widget is deliberately not draggable, and with click-through on it does not take the mouse either:
+there is then no menu and no settings panel, so **restarting does not release it**. Two ways out:
+**hold `Ctrl` and `Alt`** — the widget stops ignoring the mouse while you hold them, and its menu keeps
+the mouse until it closes, so the gesture is hold, right-click, let go, click — or press the shortcut,
+`Ctrl+Alt+O` unless you bind another in the settings panel. The held keys need no shortcut registration,
+so unlike the shortcut they cannot be taken by another program. While it is stuck, the widget says so on
+its own card, because reading it still works when clicking it does not. Only one overlay runs at a time,
+so starting a second leaves the first one alone.
+
+The widget reads WattSeal's database **read-only**, by column name, and checks the schema
+generation before reading anything: if the collector has moved on to a generation this build does
+not know, it shows the readings it can still confirm and hides the rest rather than guessing.
+
+It is a **reader**, never a writer — not of the database, which it opens with
+`SQLITE_OPEN_READ_ONLY`, and not of anything else. If the overlay breaks, the dashboard is
+unaffected, and the numbers it shows are WattSeal's own, taken from the same database the dashboard
+uses.
+
+When there is nothing to show, the widget says **which** thing is missing rather than sitting there
+blank: WattSeal not found, still starting, stopped writing, launching switched off, or a database
+newer than this build. A stopped collector never shows its readings — a frozen number looks exactly
+like a live one.
 
 See [doc/overlay.md](doc/overlay.md) for the transparency model, the settings panel and the full
 config file reference.
+
+The release build opens no console window. If it ever fails to start, the reason is in
+`startup_error.txt` next to the executable.
 
 ---
 
@@ -213,7 +247,7 @@ wattseal/               ← Root binary (tray icon, lifecycle management)
   ├── collector/        ← Background sensor polling, power estimation, DB writes
   ├── common/           ← Shared types, SQLite layer, utilities
   ├── ui/               ← Iced GUI (dashboard, hardware info, settings, charts)
-  ├── overlay/          ← Always-on-top metrics widget, run in its own process (--overlay)
+  ├── overlay/          ← Standalone metrics widget — its own program, its own workspace
   └── mqtt/             ← Publishes collected data to an MQTT broker
 ```
 
@@ -270,7 +304,7 @@ cargo build --release
 | `collector/`  | All sensor implementations (CPU, GPU, RAM, disk, network, per-process)    |
 | `common/`     | Shared types (`Event`, `SensorData`, …), SQLite database layer, utilities |
 | `ui/`         | Iced application: pages, components, charts, themes, translations         |
-| `overlay/`    | Always-on-top metrics widget, launched as a separate process by the tray  |
+| `overlay/`    | Standalone always-on-top widget — **its own workspace**, reads the database and links nothing above |
 | `mqtt/`       | MQTT publishing of collected sensor data and hardware info                |
 
 ---

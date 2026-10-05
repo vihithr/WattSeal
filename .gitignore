@@ -1,4 +1,8 @@
 /target
+# `overlay/` is its own workspace, so it has its own target directory. `/target`
+# above is anchored and does not cover it — and an un-ignored build directory is
+# a few hundred thousand files waiting to be committed by accident.
+/overlay/target
 *.db*
 *.log
 *.exe

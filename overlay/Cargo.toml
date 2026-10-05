@@ -1,20 +1,63 @@
 [package]
 name = "overlay"
-version.workspace = true
+version = "1.0.0"
 edition = "2024"
-description = "Standalone always-on-top WattSeal overlay widget, invoked by the main binary (--overlay)."
+description = "Standalone always-on-top power widget. Reads power_monitoring.db and nothing else."
+license = "MIT"
+publish = false
 
 [lib]
 name = "overlay"
 path = "src/lib.rs"
 
+[[bin]]
+# The product. Named for what a user sees in their task manager and in the zip,
+# not for the crate: "overlay" alone is too generic to leave sitting in a
+# downloads folder next to a dozen other things.
+name = "wattseal-overlay"
+path = "src/main.rs"
+
+# Its own workspace, deliberately. Being a member of WattSeal's is what tied this
+# program's releases to WattSeal's, and the empty `[workspace]` table is the line
+# that says so in a way Cargo enforces rather than a convention someone can drift
+# away from: an `overlay` crate that reaches for a sibling directory stops
+# building here instead of quietly depending on it again.
+[workspace]
+
+# No `common`. This crate does not link WattSeal's code, and the absence of that
+# line is the whole point of it: it is what lets the widget run against the
+# *official* WattSeal, and what means an upstream release never needs a rebase
+# from here. The cost is that a schema change shows up as a hidden number rather
+# than a failed build — which is what `source.rs` is arranged to prevent.
+
 [dependencies]
-common = { path = "../common" }
 iced = { version = "0.14.0", features = ["advanced", "tokio", "image"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "chrono"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.150"
 log = "0.4"
 fs2 = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    # `RegisterHotKey` and the `MOD_*` / `VK_*` constants live here, not in
+    # `WindowsAndMessaging`. They are what makes a pinned, click-through widget
+    # releasable — see `winlayer::register_escape_hotkey`.
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+# Mirrors WattSeal's release profile, and copied rather than inherited: a
+# workspace member gets these for free, a program of its own has to carry them.
+# `bundled` SQLite makes this build offline-capable, which matters for a program
+# that is meant to be unpacked from a zip and run.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[profile.dev]
+debug = "line-tables-only"

@@ -1,47 +1,90 @@
-name: CI
+name: Overlay
+
+# CI for the standalone overlay widget.
+#
+# This workflow deliberately does **not** test WattSeal. The repository carries
+# WattSeal as an unmodified snapshot of upstream so that the overlay has the
+# database schema it reads and a program that writes it, to try it against —
+# but WattSeal's own tests are upstream's business and have nothing to say about
+# anything here. What this file is responsible for is `overlay/`, which is a
+# program that shares no code with WattSeal and would keep working if the rest of
+# this tree were deleted.
+#
+# **Releases are not here.** This file triggers on branches with a `paths` filter,
+# and GitHub evaluates `branches` and `paths` as an AND — so a tag push matches
+# neither and would run nothing at all. The release pipeline is
+# `overlay-release.yml`, which triggers on tags alone.
 
 on:
   push:
-    branches: ["main"]
+    branches: ["**"]
+    paths:
+      - "overlay/**"
+      - ".github/workflows/rust.yml"
   pull_request:
-    branches: ["main"]
+    paths:
+      - "overlay/**"
+      - ".github/workflows/rust.yml"
+  # Runs the whole pipeline by hand on whatever branch is checked out. There is
+  # no other way to run it: `push` and `pull_request` are the only triggers that
+  # fire on their own, and neither can be aimed at a branch without opening a pull
+  # request first.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  fmt:
-    name: Formatting
-    runs-on: windows-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
+  check:
+    name: Check and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: ubuntu-latest
+            name: Linux
+          - os: macos-latest
+            name: macOS
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-tags: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          components: rustfmt
+          cache-on-failure: true
+          workspaces: overlay
 
-      - run: cargo +nightly fmt -- --check
+      # iced pulls GTK, Wayland and fontconfig headers on Linux; without these the
+      # test binary does not build, which is a confusing way to find out.
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev pkg-config \
+            libxkbcommon-dev libwayland-dev \
+            libssl-dev
 
-  check:
-    name: Check
-    if: github.event_name == 'pull_request'
-    needs: fmt
-    permissions: {}
-    uses: ./.github/workflows/build.yml
-    with:
-      check-only: true
+      # `--all-targets` matters more here than anywhere else in this repository.
+      # Plain `cargo check` builds only libs and bins, so a test that does not
+      # compile on the platform it is running on is invisible — which is how a
+      # platform-specific test can sit in the tree, type-checked nowhere, waiting
+      # for a runner that never looks at it.
+      - run: cargo check --manifest-path overlay/Cargo.toml --all-targets
 
-  build:
-    name: Build
-    if: github.event_name == 'push'
-    needs: fmt
-    permissions: {}
-    uses: ./.github/workflows/build.yml
-    with:
-      version-suffix: "-beta"
-      upload-artifacts: true
+      # On Linux this one test is not a formality. The overlay's "the database was
+      # deleted under the running widget" check cannot run on Windows at all —
+      # Windows refuses to unlink a file another handle has open — so on Unix is
+      # the only place that behaviour is actually observed. Compiling it proves
+      # nothing; running it does.
+      - run: cargo test --manifest-path overlay/Cargo.toml
